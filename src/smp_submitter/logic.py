@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import datetime
+import logging
 
 import httpx
 import rdflib
@@ -9,10 +10,13 @@ import rdflib
 from .config import Config
 
 GH_API = 'https://api.github.com'
+LOG = logging.getLogger(__name__)
 
 
 async def process(content: str, content_type: str) -> str:
+    LOG.debug('Getting GitHub repo name')
     repo_name = get_github_reponame(content, content_type)
+    LOG.debug(f'GitHub repo name: {repo_name}')
     try:
         return await create_fork_pr(repo_name, content)
     except Exception as e:
@@ -20,6 +24,7 @@ async def process(content: str, content_type: str) -> str:
 
 
 async def create_fork_pr(repo_name: str, content: str) -> str:
+    LOG.debug('Creating a fork and submitting PR to the original repo')
     headers = {
         'Accept': 'application/vnd.github+json',
         'Authorization': f'Bearer {Config.GITHUB_TOKEN}',
@@ -29,6 +34,7 @@ async def create_fork_pr(repo_name: str, content: str) -> str:
         # create a fork with branch based on UUID
         timestamp = datetime.datetime.now().strftime(f'%Y%m%d-%H%M%S')
         fork_name = f'{repo_name.replace("/", "-")}-{timestamp}'
+        LOG.debug(f'Creating a fork: {fork_name} from {repo_name} repo')
         r = await client.post(
             url=f'{GH_API}/repos/{repo_name}/forks',
             json={
@@ -51,8 +57,10 @@ async def create_fork_pr(repo_name: str, content: str) -> str:
                 r.raise_for_status()
                 break
             await asyncio.sleep(5)
+        LOG.debug(f'Fork created: {fork_repo_name} with default branch: {branch} by {username}')
 
         # submit the file there via GitHub API
+        LOG.debug(f'Creating metadata.json in {fork_repo_name} repo.')
         r = await client.put(
             url=f'{GH_API}/repos/{fork_repo_name}/contents/metadata.json',
             json={
@@ -65,6 +73,7 @@ async def create_fork_pr(repo_name: str, content: str) -> str:
         r.raise_for_status()
 
         # create a PR via GitHub API
+        LOG.debug(f'Creating a PR from {username}:{branch} to {repo_name}:{branch}')
         r = await client.post(
             url=f'{GH_API}/repos/{repo_name}/pulls',
             json={
@@ -77,7 +86,9 @@ async def create_fork_pr(repo_name: str, content: str) -> str:
             }
         )
         r.raise_for_status()
-        return r.json()['html_url']
+        pr_url = r.json()['html_url']
+        LOG.debug(f'PR created: {pr_url}')
+        return pr_url
 
 
 def get_github_reponame(content: str, content_type: str) -> str:

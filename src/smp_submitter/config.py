@@ -27,3 +27,11 @@ class Config:
         if cls.GITHUB_EMAIL is None:
             print('GITHUB_EMAIL env variable is missing!')
             sys.exit(1)
+
+    @classmethod
+    def apply_logging(cls):
+        logging.basicConfig(
+            level=cls.LOG_LEVEL,
+            format=cls.LOG_FORMAT,
+        )
+        LOG.debug('Logging configured...')

@@ -88,3 +88,4 @@ async def post_submit(request: fastapi.Request):
 @app.on_event("startup")
 async def app_init():
     Config.check()
+    Config.apply_logging()
