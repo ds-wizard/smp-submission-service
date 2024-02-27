@@ -11,6 +11,7 @@ from .config import Config
 
 GH_API = 'https://api.github.com'
 LOG = logging.getLogger(__name__)
+FILENAME = 'metadata.json'
 
 
 async def process(content: str, content_type: str) -> str:
@@ -42,6 +43,8 @@ async def create_fork_pr(repo_name: str, content: str) -> str:
                 'default_branch_only': True,
             },
         )
+        if not r.is_success:
+            LOG.warning(f'Error response ({r.status_code}): {r.text}')
         r.raise_for_status()
         fork_repo_name = r.json()['full_name']
         username = r.json()['owner']['login']
@@ -59,18 +62,60 @@ async def create_fork_pr(repo_name: str, content: str) -> str:
             await asyncio.sleep(5)
         LOG.debug(f'Fork created: {fork_repo_name} with default branch: {branch} by {username}')
 
+        # get info if file exists already
+        LOG.debug(f'Checking {FILENAME} in {fork_repo_name} repo')
+        r = await client.get(
+            url=f'{GH_API}/repos/{fork_repo_name}/contents/{FILENAME}',
+        )
+        existing_file_sha = None
+        if r.is_success:
+            existing_file_sha = r.json()['sha']
+            LOG.debug(f'File {FILENAME} exists in {fork_repo_name} repo with SHA: {existing_file_sha}')
+        else:
+            LOG.debug(f'File {FILENAME} does not exist in {fork_repo_name} repo')
+
         # submit the file there via GitHub API
-        LOG.debug(f'Creating metadata.json in {fork_repo_name} repo.')
-        r = await client.put(
-            url=f'{GH_API}/repos/{fork_repo_name}/contents/metadata.json',
-            json={
-                'content': base64.b64encode(content.encode('utf-8')).decode('ascii'),
+        LOG.debug(f'Submitting {FILENAME} in {fork_repo_name} repo')
+        payload = {
+            'content': base64.b64encode(content.encode('utf-8')).decode('ascii'),
+            'committer': {
                 'name': Config.GITHUB_NAME,
                 'email': Config.GITHUB_EMAIL,
-                'message': 'Update metadata from maSMP',
             },
+            'message': 'Update metadata from maSMP',
+            'headers': {
+                'X-GitHub-Api-Version': '2022-11-28'
+            }
+        }
+        if existing_file_sha is not None:
+            payload['sha'] = existing_file_sha
+        r = await client.put(
+            url=f'{GH_API}/repos/{fork_repo_name}/contents/{FILENAME}',
+            json=payload,
         )
+        if not r.is_success:
+            LOG.warning(f'Error response ({r.status_code}): {r.text}')
         r.raise_for_status()
+
+        # check if a PR already exists
+        LOG.debug(f'Checking if a PR from {username}:{branch} to {repo_name}:{branch} already exists')
+        r = await client.get(
+            url=f'{GH_API}/repos/{repo_name}/pulls',
+            params={
+                'base': branch,
+                'state': 'open',
+                'per_page': 100,
+            }
+        )
+        if not r.is_success:
+            LOG.warning(f'Error response ({r.status_code}): {r.text}')
+        if r.is_success:
+            for pr in r.json():
+                LOG.debug(f'- {pr["html_url"]}')
+                if pr['head']['repo']['full_name'] == fork_repo_name:
+                    pr_url = pr['html_url']
+                    LOG.debug(f'PR already exists: {pr_url}')
+                    return pr_url
 
         # create a PR via GitHub API
         LOG.debug(f'Creating a PR from {username}:{branch} to {repo_name}:{branch}')
@@ -85,6 +130,8 @@ async def create_fork_pr(repo_name: str, content: str) -> str:
                 'maintainer_can_modify': True,
             }
         )
+        if not r.is_success:
+            LOG.warning(f'Error response ({r.status_code}): {r.text}')
         r.raise_for_status()
         pr_url = r.json()['html_url']
         LOG.debug(f'PR created: {pr_url}')
